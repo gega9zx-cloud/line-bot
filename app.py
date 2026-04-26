@@ -3,18 +3,18 @@ from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-from google import genai
+from groq import Groq
 
 app = Flask(__name__)
 
 line_channel_access_token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 line_channel_secret = os.getenv('LINE_CHANNEL_SECRET')
-gemini_api_key = os.getenv('GEMINI_API_KEY')
+groq_api_key = os.getenv('GROQ_API_KEY')
 
 line_bot_api = LineBotApi(line_channel_access_token)
 handler = WebhookHandler(line_channel_secret)
 
-client = genai.Client(api_key=gemini_api_key)
+groq_client = Groq(api_key=groq_api_key)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -30,14 +30,15 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     try:
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=user_message,
-            config={
-                'system_instruction': '你是一個輕鬆親切、像朋友一樣聊天的 AI 助理，請用繁體中文回覆。回覆要簡短自然，不要太長。',
-            }
+        response = groq_client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[
+                {'role': 'system', 'content': '你是一個輕鬆親切、像朋友一樣聊天的 AI 助理，請用繁體中文回覆。回覆要簡短自然，不要太長。'},
+                {'role': 'user', 'content': user_message}
+            ],
+            max_tokens=500
         )
-        reply_text = response.text
+        reply_text = response.choices[0].message.content
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=reply_text)
