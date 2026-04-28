@@ -1,5 +1,7 @@
 import os
 import re
+import html
+import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -19,26 +21,53 @@ groq_client = Groq(api_key=groq_api_key)
 IG_PATTERN = re.compile(r'https?://(?:www\.)?instagram\.com/(?:reel|p|tv|stories)/[^\s]+')
 
 
+def fetch_ig_metadata(url):
+    try:
+        headers = {
+            'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+        }
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            og_title = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
+            og_desc = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
+            title = html.unescape(og_title.group(1)) if og_title else ''
+            desc = html.unescape(og_desc.group(1)) if og_desc else ''
+            return title, desc
+    except Exception as e:
+        print(f"Error fetching IG metadata for {url}: {e}")
+    return '', ''
+
+
 def classify_ig_link(message_text, ig_links):
     description = message_text
     for link in ig_links:
         description = description.replace(link, '').strip()
 
-    links_text = '\n'.join(ig_links)
+    ig_info_parts = []
+    for link in ig_links:
+        title, desc = fetch_ig_metadata(link)
+        info = f"連結：{link}"
+        if title:
+            info += f"\n頁面標題：{title}"
+        if desc:
+            info += f"\n頁面描述：{desc}"
+        ig_info_parts.append(info)
+
+    ig_info = '\n\n'.join(ig_info_parts)
+
     prompt = f"""你是一個內容分類助理。用戶分享了 Instagram 連結，請幫忙分類整理。
 
-用戶的訊息內容：「{message_text}」
+用戶附帶的文字：「{description}」
 
-找到的 IG 連結：
-{links_text}
+以下是從 IG 頁面抓取到的資訊：
+{ig_info}
 
-用戶附帶的描述文字：「{description}」
-
-請根據內容判斷分類，常見分類包括（但不限於）：
+請根據以上資訊判斷分類，常見分類包括（但不限於）：
 - 地點-秘境-美食（餐廳、景點、秘境等）
 - AI工具（AI 相關工具、教學）
 - 娛樂（搞笑、音樂、遊戲等）
 - 旅遊景點（旅遊相關）
+- 賺錢-副業（賺錢方法、副業、接案等）
 - 學習資源（教學、知識分享）
 - 生活好物（推薦商品、生活技巧）
 
@@ -48,7 +77,7 @@ def classify_ig_link(message_text, ig_links):
 [標題或簡短描述]
 [IG連結]
 
-如果有多個連結，每個都要分類。如果用戶有提供描述就用描述當標題，沒有的話請根據連結內容猜測一個簡短標題。"""
+如果有多個連結，每個都要分類。標題請根據頁面資訊寫一個簡短的中文描述。"""
 
     try:
         response = groq_client.chat.completions.create(
